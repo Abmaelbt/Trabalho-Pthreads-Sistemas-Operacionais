@@ -3,35 +3,6 @@ import threading
 import random
 import time
 
-# Configurações do Jogo
-SCREEN_WIDTH = 800
-SCREEN_HEIGHT = 600
-FPS = 60
-
-# Parâmetros de dificuldade
-difficulty = {
-    1: {'k': 40, 'speed': 1, 'm': 10},
-    2: {'k': 30, 'speed': 2, 'm': 15},
-    3: {'k': 20, 'speed': 3, 'm': 20}
-}
-difficulty_level = 3  # Pode ser 1, 2 ou 3
-
-# Configuração Inicial
-rocket_capacity = difficulty[difficulty_level]['k']
-alien_speed = difficulty[difficulty_level]['speed']
-alien_count = difficulty[difficulty_level]['m']
-rockets_left = rocket_capacity
-
-# Cores
-WHITE = (255, 255, 255)
-RED = (255, 0, 0)
-GREEN = (0, 255, 0)
-
-# Inicializa o Pygame
-pygame.init()
-screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
-pygame.display.set_caption("Jogo de Defesa Aérea")
-clock = pygame.time.Clock()
 
 # Classe para representar a bateria antiaérea
 class Battery:
@@ -39,6 +10,7 @@ class Battery:
         self.position = 'vertical'
         self.rockets = rocket_capacity
         self.lock = threading.Lock()
+        self.reloading = False
 
     def fire(self):
         with self.lock:
@@ -48,10 +20,22 @@ class Battery:
             return False
 
     def reload(self):
+        self.reloading = True
         with self.lock:
-            self.rockets = rocket_capacity
+            ReloadBattery(self).start()
 
-battery = Battery()
+
+class ReloadBattery(threading.Thread):
+    def __init__(self, battery):
+        threading.Thread.__init__(self)
+        self.reload_time = RELOAD_TIME_SECONDS
+        self.__battery = battery
+
+    def run(self):
+        time.sleep(RELOAD_TIME_SECONDS)
+        self.__battery.rockets = rocket_capacity
+        self.__battery.reloading = False
+
 
 # Classe para representar as naves alienígenas
 class Alien(threading.Thread):
@@ -64,15 +48,16 @@ class Alien(threading.Thread):
 
     def run(self):
         global running, aliens_reached_ground, aliens_hit
-        while self.y < SCREEN_HEIGHT and not self.hit:
+        while self.y < SCREEN_HEIGHT + 10 and not self.hit:
             self.y += self.speed
             time.sleep(0.1)
-        if self.y >= SCREEN_HEIGHT and not self.hit:
+        if self.y >= SCREEN_HEIGHT + 10 and not self.hit:
             with aliens_lock:
                 aliens_reached_ground += 1
         if self.hit:
             with aliens_lock:
                 aliens_hit += 1
+
 
 # Classe para representar os foguetes
 class Rocket:
@@ -96,13 +81,6 @@ class Rocket:
             self.x += self.speed
             self.y -= self.speed
 
-# Variáveis de estado do jogo
-aliens = []
-aliens_lock = threading.Lock()
-aliens_reached_ground = 0
-aliens_hit = 0
-running = True
-rockets = []
 
 def create_aliens():
     for _ in range(alien_count):
@@ -112,12 +90,66 @@ def create_aliens():
         alien.start()
         time.sleep(1)
 
+
 def check_collision(rocket, alien):
     # Verifica se o foguete colide com a nave
     return (alien.x - 10 < rocket.x < alien.x + 10) and (alien.y - 10 < rocket.y < alien.y + 10)
 
+
+def draw_battery():
+    if battery.position == 'vertical':
+        pygame.draw.line(screen, RED, (SCREEN_WIDTH // 2, SCREEN_HEIGHT),
+                         (SCREEN_WIDTH // 2, SCREEN_HEIGHT - 50),
+                         5)
+    elif battery.position == 'left':
+        pygame.draw.line(
+            screen,
+            RED,
+            (SCREEN_WIDTH // 2, SCREEN_HEIGHT - 5),
+            (SCREEN_WIDTH // 2 - 50, SCREEN_HEIGHT - 5),
+            5)
+    elif battery.position == 'right':
+        pygame.draw.line(screen, RED, (SCREEN_WIDTH // 2, SCREEN_HEIGHT - 5),
+                         (SCREEN_WIDTH // 2 + 50, SCREEN_HEIGHT - 5),
+                         5)
+    elif battery.position == 'diagonal_left':
+        pygame.draw.line(screen, RED, (SCREEN_WIDTH // 2, SCREEN_HEIGHT),
+                         (SCREEN_WIDTH // 2 - 35, SCREEN_HEIGHT - 35), 5)
+    elif battery.position == 'diagonal_right':
+        pygame.draw.line(screen, RED, (SCREEN_WIDTH // 2, SCREEN_HEIGHT),
+                         (SCREEN_WIDTH // 2 + 35, SCREEN_HEIGHT - 35), 5)
+
+
+def check_game_has_finished():
+    global running
+    won_lost_font = pygame.font.Font(None, 60)
+    if aliens_hit >= alien_count // 2:
+        won_message = won_lost_font.render("YOU WON!", True, YELLOW)
+        won_rect = won_message.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2))
+        screen.blit(won_message, won_rect)
+        pygame.display.flip()
+        pygame.time.wait(4000)
+        running = False
+    elif aliens_reached_ground >= alien_count // 2:
+        lost_message = won_lost_font.render("YOU LOST!", True, RED)
+        lost_rect = lost_message.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2))
+        screen.blit(lost_message, lost_rect)
+        pygame.display.flip()
+        pygame.time.wait(4000)
+        running = False
+
+
+def create_rocket():
+    if battery.position in ['left', 'right']:
+        return Rocket(SCREEN_WIDTH // 2, SCREEN_HEIGHT - 7, battery.position)
+    if battery.position in ['diagonal_left', 'diagonal_right']:
+        return Rocket(SCREEN_WIDTH // 2, SCREEN_HEIGHT, battery.position)
+
+    return Rocket(SCREEN_WIDTH // 2 - 2, SCREEN_HEIGHT - 20, battery.position)
+
+
 def game_loop():
-    global running, rockets_left
+    global running
     while running:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -126,34 +158,24 @@ def game_loop():
                 if event.key == pygame.K_SPACE:
                     if battery.fire():
                         # Dispara um foguete
-                        rocket = Rocket(SCREEN_WIDTH // 2, SCREEN_HEIGHT, battery.position)
+                        rocket = create_rocket()
                         rockets.append(rocket)
-                if event.key == pygame.K_r:
+                if event.key == pygame.K_r and not battery.reloading:
                     battery.reload()
-                if event.key == pygame.K_LEFT:
-                    battery.position = 'left'
-                if event.key == pygame.K_RIGHT:
-                    battery.position = 'right'
-                if event.key == pygame.K_UP:
-                    battery.position = 'vertical'
                 if event.key == pygame.K_a:
-                    battery.position = 'diagonal_left'
+                    battery.position = 'left'
                 if event.key == pygame.K_d:
+                    battery.position = 'right'
+                if event.key == pygame.K_w:
+                    battery.position = 'vertical'
+                if event.key == pygame.K_q:
+                    battery.position = 'diagonal_left'
+                if event.key == pygame.K_e:
                     battery.position = 'diagonal_right'
 
-        screen.fill(WHITE)
+        screen.fill(BLACK)
 
-        # Desenha a bateria
-        if battery.position == 'vertical':
-            pygame.draw.line(screen, RED, (SCREEN_WIDTH//2, SCREEN_HEIGHT), (SCREEN_WIDTH//2, SCREEN_HEIGHT - 50), 5)
-        elif battery.position == 'left':
-            pygame.draw.line(screen, RED, (SCREEN_WIDTH//2, SCREEN_HEIGHT), (SCREEN_WIDTH//2 - 50, SCREEN_HEIGHT), 5)
-        elif battery.position == 'right':
-            pygame.draw.line(screen, RED, (SCREEN_WIDTH//2, SCREEN_HEIGHT), (SCREEN_WIDTH//2 + 50, SCREEN_HEIGHT), 5)
-        elif battery.position == 'diagonal_left':
-            pygame.draw.line(screen, RED, (SCREEN_WIDTH//2, SCREEN_HEIGHT), (SCREEN_WIDTH//2 - 35, SCREEN_HEIGHT - 35), 5)
-        elif battery.position == 'diagonal_right':
-            pygame.draw.line(screen, RED, (SCREEN_WIDTH//2, SCREEN_HEIGHT), (SCREEN_WIDTH//2 + 35, SCREEN_HEIGHT - 35), 5)
+        draw_battery()
 
         # Move e desenha os foguetes
         for rocket in rockets[:]:
@@ -161,7 +183,16 @@ def game_loop():
             if rocket.y < 0 or rocket.x < 0 or rocket.x > SCREEN_WIDTH:
                 rockets.remove(rocket)
             else:
-                pygame.draw.rect(screen, RED, (rocket.x, rocket.y, 5, 10))
+                if rocket.direction in ['right', 'left']:
+                    pygame.draw.rect(screen, RED, (rocket.x, rocket.y, 10, 5))
+                elif rocket.direction == 'diagonal_left':
+                    pygame.draw.line(screen, RED, (rocket.x, rocket.y),
+                                     (rocket.x - 6, rocket.y - 6), 7)
+                elif rocket.direction == 'diagonal_right':
+                    pygame.draw.line(screen, RED, (rocket.x, rocket.y),
+                                     (rocket.x + 6, rocket.y - 6), 7)
+                else:
+                    pygame.draw.rect(screen, RED, (rocket.x, rocket.y, 5, 10))
 
         # Desenha os aliens e verifica colisões
         for alien in aliens:
@@ -174,21 +205,109 @@ def game_loop():
                 if not alien.hit:
                     pygame.draw.circle(screen, GREEN, (alien.x, alien.y), 10)
 
-        # Desenha a contagem de foguetes
         font = pygame.font.Font(None, 36)
         text = font.render(f'Rockets: {battery.rockets}', True, RED)
         screen.blit(text, (10, 10))
 
+        if battery.reloading:
+            reloading_text = font.render('Reloading', True, RED)
+            screen.blit(reloading_text, (SCREEN_WIDTH - 150, 10))
+
         pygame.display.flip()
         clock.tick(FPS)
 
-        # Verifica condições de vitória/derrota
-        if aliens_hit >= alien_count // 2:
-            print("Vitória!")
-            running = False
-        if aliens_reached_ground >= alien_count // 2:
-            print("Derrota!")
-            running = False
+        check_game_has_finished()
+
+
+def show_menu():
+    menu_running = True
+    selected_difficulty = 1
+    font = pygame.font.Font(None, 74)
+
+    while menu_running:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                exit()
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_1:
+                    selected_difficulty = 1
+                    menu_running = False
+                if event.key == pygame.K_2:
+                    selected_difficulty = 2
+                    menu_running = False
+                if event.key == pygame.K_3:
+                    selected_difficulty = 3
+                    menu_running = False
+
+        screen.fill(BLACK)
+
+        text = font.render("GAME DIFFICULTY", True, WHITE)
+        screen.blit(text, (100, 100))
+        text = font.render("1. EASY", True, GREEN)
+        screen.blit(text, (100, 200))
+        text = font.render("2. MEDIUM", True, YELLOW)
+        screen.blit(text, (100, 300))
+        text = font.render("3. HARD", True, RED)
+        screen.blit(text, (100, 400))
+
+        pygame.display.flip()
+        clock.tick(FPS)
+
+    return selected_difficulty
+
+
+def setup_difficulty(level):
+    global rocket_capacity, alien_speed, alien_count
+    rocket_capacity = difficulty[level]['rockets_amount']
+    alien_speed = difficulty[level]['alien_speed']
+    alien_count = difficulty[level]['aliens_amount']
+
+
+# Configurações do Jogo
+SCREEN_WIDTH = 800
+SCREEN_HEIGHT = 600
+FPS = 60
+
+# Parâmetros de dificuldade
+difficulty = {
+    1: {'rockets_amount': 40, 'alien_speed': 2, 'aliens_amount': 10},
+    2: {'rockets_amount': 30, 'alien_speed': 3, 'aliens_amount': 15},
+    3: {'rockets_amount': 20, 'alien_speed': 4, 'aliens_amount': 20}
+}
+
+# Configuração Inicial
+rocket_capacity = 40
+alien_speed = 1
+alien_count = 10
+RELOAD_TIME_SECONDS = 3
+
+# Cores
+BLACK = (0, 0, 0)
+RED = (255, 0, 0)
+GREEN = (0, 255, 0)
+YELLOW = (255, 255, 0)
+WHITE = (255, 255, 255)
+
+# Inicializa o Pygame
+pygame.init()
+screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
+pygame.display.set_caption("Jogo de Defesa Aérea")
+clock = pygame.time.Clock()
+
+difficulty_level = show_menu()
+setup_difficulty(difficulty_level)
+
+battery = Battery()
+
+# Variáveis de estado do jogo
+aliens = []
+aliens_lock = threading.Lock()
+aliens_reached_ground = 0
+aliens_hit = 0
+running = True
+rockets = []
+
 
 # Cria a thread para criar as naves
 alien_thread = threading.Thread(target=create_aliens)
@@ -196,9 +315,5 @@ alien_thread.start()
 
 # Inicia o loop do jogo
 game_loop()
-
-# Aguarda a finalização das threads
-for alien in aliens:
-    alien.join()
 
 pygame.quit()
