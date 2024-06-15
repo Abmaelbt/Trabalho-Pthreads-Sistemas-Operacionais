@@ -22,19 +22,17 @@ class Battery:
     def reload(self):
         self.reloading = True
         with self.lock:
-            ReloadBattery(self).start()
+            ReloadBattery().start()
 
 
 class ReloadBattery(threading.Thread):
-    def __init__(self, battery):
+    def __init__(self):
         threading.Thread.__init__(self)
-        self.reload_time = RELOAD_TIME_SECONDS
-        self.__battery = battery
 
     def run(self):
         time.sleep(RELOAD_TIME_SECONDS)
-        self.__battery.rockets = rocket_capacity
-        self.__battery.reloading = False
+        battery.rockets = rocket_capacity
+        battery.reloading = False
 
 
 # Classe para representar as naves alienígenas
